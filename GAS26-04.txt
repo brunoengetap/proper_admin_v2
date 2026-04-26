@@ -166,6 +166,18 @@ function doGet(e) {
       case 'getClientsForField':
         result = getClientsForField();
         break;
+      case 'getSystemHealth':
+        result = getSystemHealth();
+        break;
+      case 'getDuplicates':
+        result = getDuplicates();
+        break;
+      case 'getDeletedRecords':
+        result = getDeletedRecords(params.sheetName || '');
+        break;
+      case 'createBackupSnapshot':
+        result = createBackupSnapshot();
+        break;
       default:
         result = { status: 'error', error: 'Ação desconhecida: ' + action };
     }
@@ -702,6 +714,145 @@ function getClientsForField() {
   return { status: 'ok', clients: unique };
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDITORIA — getSystemHealth
+// ═══════════════════════════════════════════════════════════════════════════
+function getSystemHealth() {
+  const tabelas = ['MAQUINAS', 'MODELOS', 'CLIENTES', 'VISITAS', 'PECAS_LOG', 'MACHINE_PARTS'];
+  const summary = {};
+
+  tabelas.forEach(nome => {
+    const rows = getSheetData(nome);
+    const ativos   = rows.filter(r => String(r['Ativo'] || 'SIM').toUpperCase() !== 'NÃO');
+    const inativos = rows.filter(r => String(r['Ativo'] || 'SIM').toUpperCase() === 'NÃO');
+    const teste    = rows.filter(r => String(r['Tipo_Registro'] || '').toUpperCase() === 'TESTE');
+    summary[nome] = {
+      total:    rows.length,
+      ativos:   ativos.length,
+      inativos: inativos.length,
+      teste:    teste.length
+    };
+  });
+
+  const machineIds = new Set(
+    getSheetData('MAQUINAS')
+      .filter(r => String(r['Ativo'] || 'SIM').toUpperCase() !== 'NÃO')
+      .map(r => String(r['ID'] || '').trim())
+      .filter(Boolean)
+  );
+  const orphanParts = getSheetData('MACHINE_PARTS').filter(r => {
+    const mid = String(r['Machine_ID'] || '').trim();
+    return mid && !machineIds.has(mid);
+  });
+  const orphanVisits = getSheetData('VISITAS').filter(r => {
+    const mid = String(r['Machine_ID'] || '').trim();
+    return mid && !machineIds.has(mid);
+  });
+
+  return {
+    status: 'ok',
+    ts: new Date().toISOString(),
+    tabelas: summary,
+    orfaos: {
+      machine_parts: orphanParts.length,
+      visitas: orphanVisits.length
+    }
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDITORIA — getDuplicates
+// ═══════════════════════════════════════════════════════════════════════════
+function getDuplicates() {
+  const machines = getSheetData('MAQUINAS');
+  const dupsByMachineId    = {};
+  const dupsByClientSerial = {};
+  const dupsByClientTag    = {};
+
+  machines.forEach(m => {
+    const mid = String(m['ID'] || '').trim();
+    const clientSerial = (String(m['Cliente'] || '').trim() + '|' + String(m['Série'] || '').trim()).toLowerCase();
+    const clientTag    = (String(m['Cliente'] || '').trim() + '|' + String(m['TAG']    || '').trim()).toLowerCase();
+    if (mid) dupsByMachineId[mid] = (dupsByMachineId[mid] || 0) + 1;
+    if (clientSerial && clientSerial !== '|') dupsByClientSerial[clientSerial] = (dupsByClientSerial[clientSerial] || 0) + 1;
+    if (clientTag    && clientTag    !== '|') dupsByClientTag[clientTag]        = (dupsByClientTag[clientTag]    || 0) + 1;
+  });
+
+  const filterDups = obj =>
+    Object.entries(obj).filter(([, c]) => c > 1).map(([key, count]) => ({ key, count }));
+
+  const porMachineId     = filterDups(dupsByMachineId);
+  const porClienteSerial = filterDups(dupsByClientSerial);
+  const porClienteTag    = filterDups(dupsByClientTag);
+
+  return {
+    status: 'ok',
+    ts: new Date().toISOString(),
+    duplicatas: {
+      por_machine_id:    porMachineId,
+      por_cliente_serie: porClienteSerial,
+      por_cliente_tag:   porClienteTag
+    },
+    total_duplicatas: porMachineId.length + porClienteSerial.length + porClienteTag.length
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDITORIA — getDeletedRecords
+// ═══════════════════════════════════════════════════════════════════════════
+function getDeletedRecords(sheetName) {
+  const tabelasPermitidas = ['MAQUINAS', 'MODELOS', 'CLIENTES', 'VISITAS'];
+
+  if (sheetName) {
+    if (!tabelasPermitidas.includes(sheetName)) {
+      return { status: 'error', error: 'Tabela inválida. Permitidas: ' + tabelasPermitidas.join(', ') };
+    }
+    const rows = getSheetData(sheetName).filter(r => String(r['Ativo'] || 'SIM').toUpperCase() === 'NÃO');
+    return { status: 'ok', sheetName, records: rows, total: rows.length };
+  }
+
+  const result = {};
+  tabelasPermitidas.forEach(nome => {
+    const rows = getSheetData(nome).filter(r => String(r['Ativo'] || 'SIM').toUpperCase() === 'NÃO');
+    result[nome] = { total: rows.length, records: rows };
+  });
+  return { status: 'ok', ts: new Date().toISOString(), deletados: result };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDITORIA — createBackupSnapshot
+// ═══════════════════════════════════════════════════════════════════════════
+function createBackupSnapshot() {
+  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HH-mm');
+  const tabelas = ['MAQUINAS', 'MODELOS', 'CLIENTES', 'VISITAS', 'PECAS_LOG', 'MACHINE_PARTS'];
+  const created = [];
+
+  tabelas.forEach(nome => {
+    const source = SS.getSheetByName(nome);
+    if (!source) {
+      created.push({ sheet: 'BAK_' + nome + '_' + ts, status: 'aba não encontrada' });
+      return;
+    }
+    const snapName = 'BAK_' + nome + '_' + ts;
+    if (SS.getSheetByName(snapName)) {
+      created.push({ sheet: snapName, status: 'já existia' });
+      return;
+    }
+    const snap = source.copyTo(SS);
+    snap.setName(snapName);
+    SS.setActiveSheet(snap);
+    SS.moveActiveSheet(SS.getNumSheets());
+    created.push({ sheet: snapName, status: 'criado', rows: source.getLastRow() - 1 });
+  });
+
+  return {
+    status: 'ok',
+    ts: new Date().toISOString(),
+    snapshot_prefix: 'BAK_*_' + ts,
+    abas_criadas: created
+  };
+}
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS DE MACHINE PARTS
 // ═══════════════════════════════════════════════════════════════════════════
