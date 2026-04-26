@@ -4207,6 +4207,16 @@ function renderConfigStats(){
       </div>
     </div>
 
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">Seed temporário de demonstração</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        Insere/atualiza apenas o conjunto demo sem afetar os dados reais já cadastrados.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="seedDemoData()">⚠ Seed de Dados Demo (usar 1x)</button>
+      </div>
+    </div>
+
     <div class="card" id="snapshotsCard">
       <div style="font-size:13px;font-weight:600;margin-bottom:6px">🗂 Snapshots de segurança</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">
@@ -4226,6 +4236,141 @@ function renderConfigStats(){
     </div>
   `;
   if(gsUrl) document.getElementById('gsUrlInput').value=gsUrl;
+}
+
+async function seedDemoData(){
+  const DEMO_CLIENT_ID='CLI-DEMO-001';
+  const DEMO_MODEL_ID='MOD-SCHULZ-SRP3010III';
+  const DEMO_MACHINE_ID='MAC-SORRAG-41805';
+  const wait=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
+  const nowIso=new Date().toISOString();
+
+  if(!Array.isArray(db.clients)) db.clients=[];
+  if(!Array.isArray(db.models)) db.models=[];
+  if(!Array.isArray(db.machines)) db.machines=[];
+
+  const demoExists=
+    db.clients.some(c=>c.id===DEMO_CLIENT_ID) ||
+    db.models.some(m=>m.id===DEMO_MODEL_ID) ||
+    db.machines.some(m=>m.id===DEMO_MACHINE_ID);
+
+  if(demoExists){
+    const ok=confirm('O conjunto demo já existe. Deseja sobrescrever apenas os dados demo?');
+    if(!ok) return;
+  }
+
+  const clienteDemo={
+    id:'CLI-DEMO-001',
+    nome:'SORRAG DO BRASIL METALÚRGICA LTDA.',
+    cnpj:'16.615.974/0001-10',
+    cidade:'Cláudio',
+    telefone:'(37) 3381-1058',
+    email:'fiscal@sorrag.com.br',
+    antecedencia_alerta_dias:30,
+    drive_url:'',
+    observacoes:'Cliente com 4 compressores de parafuso Schulz. Contato: Adilson.',
+    tipoRegistro:'PRODUCAO',
+    updatedAt:nowIso
+  };
+
+  const modeloDemo={
+    id:'MOD-SCHULZ-SRP3010III',
+    brand:'Schulz',
+    model:'SRP 3010 III',
+    type:'Compressor Parafuso',
+    power:'10 cv',
+    pressure:'10 bar',
+    flow:'',
+    voltage:'',
+    ampere:'',
+    obs:'',
+    photos:[],
+    subsystems:[],
+    directParts:[
+      { id:'PART-001', name:'Filtro de Óleo', ref:'W9231', partBrand:'', supplierPrimary:'', interval:1000, qty:1, supplier:'', cost:0, criticality:'normal', similarities:[], obs:'', slot:'oil_filter' },
+      { id:'PART-002', name:'Filtro de Ar Primário', ref:'C1140', partBrand:'', supplierPrimary:'', interval:500, qty:1, supplier:'', cost:0, criticality:'normal', similarities:[], obs:'', slot:'air_filter_primary' },
+      { id:'PART-003', name:'Filtro Separador Ar/Óleo', ref:'007.0233-0', partBrand:'', supplierPrimary:'', interval:4000, qty:1, supplier:'', cost:0, criticality:'normal', similarities:[], obs:'', slot:'separator' },
+      { id:'PART-004', name:'Óleo Lubrificante (Schulz 46 SEMI)', ref:'46 SEMI', partBrand:'', supplierPrimary:'', interval:1000, qty:1, supplier:'', cost:0, criticality:'normal', similarities:[], obs:'', slot:'oil' },
+      { id:'PART-005', name:'Correia', ref:'3VX 335', partBrand:'', supplierPrimary:'', interval:3000, qty:1, supplier:'', cost:0, criticality:'normal', similarities:[], obs:'', slot:'belt' }
+    ],
+    tipoRegistro:'PRODUCAO',
+    updatedAt:nowIso
+  };
+
+  const maquinaDemo={
+    id:'MAC-SORRAG-41805',
+    client:'SORRAG DO BRASIL METALÚRGICA LTDA.',
+    branch:'FILIAL ANDAIMES',
+    cnpj:'16.615.974/0001-10',
+    contact:'Adilson',
+    phone:'(37) 3381-1058',
+    email:'fiscal@sorrag.com.br',
+    city:'Cláudio',
+    brand:'Schulz',
+    model:'SRP 3010 III',
+    serial:'41805',
+    year:2023,
+    tag:'296-CP-01',
+    type:'Compressor Parafuso',
+    location:'LASER DE CORTE DE TUBOS — FILIAL ANDAIMES',
+    power:'10 cv',
+    hourTotal:5091,
+    hpw:90,
+    obs:'',
+    driveLink:'',
+    photos:[],
+    lastVisit:'2026-04-02',
+    nextVisit:'2026-05-02',
+    tipoRegistro:'PRODUCAO',
+    updatedAt:nowIso,
+    parts:{
+      filtro_oleo:    { name:'Filtro de Óleo',           lastChange:5091, interval:1000, ref:'W9231',      na:false },
+      filtro_ar_prim: { name:'Filtro de Ar Primário',    lastChange:5091, interval:500,  ref:'C1140',      na:false },
+      separador:      { name:'Filtro Separador Ar/Óleo', lastChange:3091, interval:4000, ref:'007.0233-0', na:false },
+      oleo_lubrif:    { name:'Óleo Lubrificante',        lastChange:5091, interval:1000, ref:'46 SEMI',    na:false },
+      correia:        { name:'Correia',                  lastChange:3091, interval:3000, ref:'3VX 335',    na:false },
+      filtro_ar_secu: { name:'Filtro de Ar Secundário',  lastChange:0,    interval:4000, ref:'',           na:true  },
+      v_termostatica: { name:'Válvula Termostática',     lastChange:0,    interval:8000, ref:'',           na:true  },
+      v_admissao:     { name:'Válvula de Admissão',      lastChange:0,    interval:8000, ref:'',           na:true  },
+      v_pressao_min:  { name:'Válvula Pressão Mínima',   lastChange:0,    interval:8000, ref:'',           na:true  }
+    }
+  };
+
+  db.clients=db.clients.filter(c=>c.id!==DEMO_CLIENT_ID);
+  db.models=db.models.filter(m=>m.id!==DEMO_MODEL_ID);
+  db.machines=db.machines.filter(m=>m.id!==DEMO_MACHINE_ID);
+
+  db.clients.push(clienteDemo);
+  db.models.push(modeloDemo);
+  db.machines.push(maquinaDemo);
+
+  save();
+  _safeRerender();
+  toast('Seed demo aplicado localmente','success');
+
+  try{
+    await syncToGS('saveClient',{client:clienteDemo});
+    await wait(120);
+    await syncToGS('saveModel',{model:modeloDemo});
+    await wait(120);
+    for(const peca of modeloDemo.directParts){
+      await syncToGS('savePartMaster',{part:{...peca,modelId:modeloDemo.id}});
+      await wait(120);
+    }
+    for(const peca of modeloDemo.directParts){
+      await syncToGS('replacePartSimilarities',{
+        partId:peca.id,
+        modelId:modeloDemo.id,
+        similarities:Array.isArray(peca.similarities)?peca.similarities:[]
+      });
+      await wait(120);
+    }
+    await syncToGS('saveMachine',{machine:maquinaDemo});
+    toast('Seed demo sincronizado com Google Sheets','success');
+  }catch(e){
+    console.warn('seedDemoData sync:',e);
+    toast('Seed local concluído. Falha na sync do demo.','error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
