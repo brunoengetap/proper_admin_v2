@@ -1747,6 +1747,7 @@ function saveClient(){
     antecedencia_alerta_dias: parseInt(document.getElementById('clAlerta').value)||30,
     drive_url:  document.getElementById('clDrive').value.trim(),
     observacoes:document.getElementById('clObs').value.trim(),
+    tipoRegistro: 'PRODUCAO',
     updatedAt:  new Date().toISOString()
   };
   if(editClientId){
@@ -1775,9 +1776,10 @@ function openModalClientPrefill(nome){
 }
 
 function deleteClient(id){
-  if(!confirm('Excluir este cliente?')) return;
+  if(!confirm('Inativar este cliente? O registro será mantido no histórico.')) return;
   db.clients=db.clients.filter(c=>c.id!==id);
-  save(); renderClients(); toast('Cliente excluído');
+  save(); renderClients(); toast('Cliente inativado');
+  syncToGS('deleteClient',{id, deletedBy:'admin'});
 }
 
 function connectGS(){
@@ -2157,7 +2159,7 @@ function renderCatalog(){
         </div>
         <div class="hero-actions">
           <button class="btn btn-secondary btn-sm" onclick="openModalModel('${m.id}')">Editar</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.id}')">Excluir</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.id}')">Inativar</button>
         </div>
       </div>
       <div class="chip-row">
@@ -2507,7 +2509,8 @@ function saveModel(){
     flow:document.getElementById('mFlow').value.trim(),
     voltage:document.getElementById('mVoltage').value.trim(),
     ampere:document.getElementById('mAmpere').value.trim(),
-    obs:document.getElementById('mObs').value.trim()
+    obs:document.getElementById('mObs').value.trim(),
+    tipoRegistro:'PRODUCAO'
   };
   if(editModelId){
     Object.assign(getModel(editModelId),data);
@@ -2524,11 +2527,12 @@ function saveModel(){
 }
 
 function deleteModel(id){
-  if(!confirm('Excluir modelo e todas as suas peças?')) return;
+  if(!confirm('Inativar este modelo? O registro será mantido no histórico.')) return;
   db.models=db.models.filter(m=>m.id!==id);
   selModelId=db.models.length?db.models[0].id:null;
   save(); renderSidebar(); renderCatalog();
-  toast('Modelo excluído');
+  toast('Modelo inativado');
+  syncToGS('deleteModel',{id, deletedBy:'admin'});
 }
 
 // ── SUBSYSTEM MODAL ──
@@ -2840,6 +2844,7 @@ function saveMachine(){
     driveLink:document.getElementById('mcDriveLink').value.trim(),
     lastVisit:document.getElementById('mcLastVisit').value,
     nextVisit:document.getElementById('mcNextVisit').value,
+    tipoRegistro:'PRODUCAO',
     updatedAt:new Date().toISOString()
   };
   if(editMachineId){
@@ -2859,10 +2864,17 @@ function saveMachine(){
 }
 
 function deleteMachine(id){
-  if(!confirm('Excluir este equipamento?')) return;
+  if(!confirm('Inativar este equipamento? O registro será mantido no histórico.')) return;
   db.machines=db.machines.filter(m=>m.id!==id);
   save(); renderMachines(); renderSidebar();
-  toast('Máquina excluída');
+  toast('Máquina inativada');
+  syncToGS('deleteMachine',{id, deletedBy:'admin'});
+}
+
+function hardDeleteTestRecord(sheetName, id, label) {
+  if(!confirm('ATENÇÃO: excluir permanentemente este registro de TESTE?\n\n"' + label + '"\n\nEsta ação não pode ser desfeita.')) return;
+  syncToGS('hardDeleteTestRecord', { sheetName, id });
+  toast('Registro de teste excluído permanentemente', 'warning');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2927,7 +2939,7 @@ function openMachineDetail(id){
       <button class="btn btn-secondary btn-sm" onclick="openModalMachine('${id}');closeModal('modalMachineParts')">Editar dados</button>
       <button class="btn btn-secondary btn-sm" onclick="switchMdetTab('pecas')">✏️ Editar peças</button>
       <button class="btn btn-secondary btn-sm" onclick="promoverAoCatalogo('${id}')">📋 Promover ao catálogo</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteMachine('${id}');closeModal('modalMachineParts')">Excluir</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteMachine('${id}');closeModal('modalMachineParts')">Inativar</button>
     </div>`;
 
   // ── ABA PEÇAS (edição) ──
@@ -3920,7 +3932,7 @@ function renderClients(){
             <td>
               <div class="row-actions">
                 <button class="btn-icon" onclick="openModalClient('${c.id}')" title="Editar cliente">✏️</button>
-                <button class="btn-icon" onclick="deleteClient('${c.id}')" title="Excluir cliente">🗑️</button>
+                <button class="btn-icon" onclick="deleteClient('${c.id}')" title="Inativar cliente">🗑️</button>
               </div>
             </td>
           </tr>`;
