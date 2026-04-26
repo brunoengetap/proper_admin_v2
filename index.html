@@ -1793,6 +1793,139 @@ function connectGS(){
   });
 }
 
+async function auditCheckHealth() {
+  const el = document.getElementById('auditResult');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text2)">⏳ Consultando...</span>';
+  try {
+    const r = await fetch(gsUrl + '?action=getSystemHealth&key=' + _AUTH_HASH);
+    const d = await r.json();
+    if (d.status !== 'ok') { el.innerHTML = '❌ Erro: ' + d.error; return; }
+
+    const tab = d.tabelas;
+    const linhas = Object.entries(tab).map(([nome, v]) =>
+      `<tr>
+        <td style="padding:3px 8px 3px 0;font-weight:500">${nome}</td>
+        <td style="padding:3px 8px;text-align:right">${v.total}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--green)">${v.ativos}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--orange)">${v.inativos}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--blue)">${v.teste}</td>
+      </tr>`
+    ).join('');
+
+    el.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px">
+        <thead>
+          <tr style="color:var(--text2);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:3px 8px 3px 0">Tabela</th>
+            <th style="text-align:right;padding:3px 8px">Total</th>
+            <th style="text-align:right;padding:3px 8px">Ativos</th>
+            <th style="text-align:right;padding:3px 8px">Inativos</th>
+            <th style="text-align:right;padding:3px 8px">Teste</th>
+          </tr>
+        </thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      <div style="color:var(--text2)">
+        Órfãos — MACHINE_PARTS: <strong>${d.orfaos.machine_parts}</strong> &nbsp;|&nbsp;
+        VISITAS: <strong>${d.orfaos.visitas}</strong>
+      </div>
+      <div style="color:var(--text3);margin-top:4px">Atualizado em: ${new Date(d.ts).toLocaleString('pt-BR')}</div>
+    `;
+  } catch(e) {
+    el.innerHTML = '❌ Falha na consulta: ' + (e.message || 'erro desconhecido');
+  }
+}
+
+async function auditCheckDuplicates() {
+  const el = document.getElementById('auditResult');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text2)">⏳ Buscando duplicidades...</span>';
+  try {
+    const r = await fetch(gsUrl + '?action=getDuplicates&key=' + _AUTH_HASH);
+    const d = await r.json();
+    if (d.status !== 'ok') { el.innerHTML = '❌ Erro: ' + d.error; return; }
+
+    if (d.total_duplicatas === 0) {
+      el.innerHTML = '✅ Nenhuma duplicidade encontrada.';
+      return;
+    }
+
+    const renderList = (label, items) => {
+      if (!items.length) return '';
+      return `<div style="margin-bottom:8px">
+        <div style="font-weight:500;margin-bottom:4px">${label} (${items.length})</div>
+        ${items.map(i => `<div style="color:var(--red);padding:2px 0">${i.key} — ${i.count}x</div>`).join('')}
+      </div>`;
+    };
+
+    el.innerHTML =
+      `<div style="color:var(--red);font-weight:500;margin-bottom:8px">
+        ⚠ ${d.total_duplicatas} tipo(s) de duplicidade encontrado(s)
+      </div>` +
+      renderList('Por Machine_ID', d.duplicatas.por_machine_id) +
+      renderList('Por cliente + série', d.duplicatas.por_cliente_serie) +
+      renderList('Por cliente + TAG', d.duplicatas.por_cliente_tag);
+  } catch(e) {
+    el.innerHTML = '❌ Falha na consulta: ' + (e.message || 'erro desconhecido');
+  }
+}
+
+async function auditCheckDeleted() {
+  const el = document.getElementById('auditResult');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text2)">⏳ Buscando registros inativados...</span>';
+  try {
+    const r = await fetch(gsUrl + '?action=getDeletedRecords&key=' + _AUTH_HASH);
+    const d = await r.json();
+    if (d.status !== 'ok') { el.innerHTML = '❌ Erro: ' + d.error; return; }
+
+    const linhas = Object.entries(d.deletados).map(([nome, v]) =>
+      `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:0.5px solid var(--border)">
+        <span>${nome}</span>
+        <span style="color:${v.total > 0 ? 'var(--orange)' : 'var(--text2)'}">
+          ${v.total} inativado(s)
+        </span>
+      </div>`
+    ).join('');
+
+    const total = Object.values(d.deletados).reduce((s, v) => s + v.total, 0);
+    el.innerHTML = `
+      <div style="margin-bottom:8px">${linhas}</div>
+      <div style="font-weight:500">Total: ${total} registro(s) inativado(s)</div>
+      <div style="color:var(--text3);margin-top:4px;font-size:11px">
+        Para ver detalhes de uma tabela específica, use ?action=getDeletedRecords&sheetName=MAQUINAS na URL do GAS.
+      </div>
+    `;
+  } catch(e) {
+    el.innerHTML = '❌ Falha na consulta: ' + (e.message || 'erro desconhecido');
+  }
+}
+
+async function auditCreateBackup() {
+  if (!confirm('Criar snapshot de backup de todas as abas no Google Sheets?\n\nIsso adiciona abas BAK_* à planilha.')) return;
+  const el = document.getElementById('auditResult');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text2)">⏳ Criando backup...</span>';
+  try {
+    const r = await fetch(gsUrl + '?action=createBackupSnapshot&key=' + _AUTH_HASH);
+    const d = await r.json();
+    if (d.status !== 'ok') { el.innerHTML = '❌ Erro: ' + d.error; return; }
+
+    const linhas = d.abas_criadas.map(a =>
+      `<div style="padding:2px 0">${a.sheet} — ${a.status}${a.rows !== undefined ? ' (' + a.rows + ' linhas)' : ''}</div>`
+    ).join('');
+
+    el.innerHTML = `
+      <div style="color:var(--green);font-weight:500;margin-bottom:6px">✅ Backup criado com sucesso</div>
+      <div style="font-size:11px">${linhas}</div>
+    `;
+    toast('Backup criado no Sheets', 'success');
+  } catch(e) {
+    el.innerHTML = '❌ Falha ao criar backup: ' + (e.message || 'erro desconhecido');
+  }
+}
+
 // ═══════════════════════════════════════════════════════════
 // VIEWS
 // ═══════════════════════════════════════════════════════════
@@ -2130,7 +2263,14 @@ function renderCatalog(){
             <td style="font-size:11px;color:var(--text2)">${m.type||'—'}</td>
             <td><span style="font-weight:600;color:var(--blue-mid)">${nParts}</span></td>
             <td>${machines.length?`<span style="font-weight:600">${machines.length}</span> <span style="font-size:10px;color:var(--text3)">${machines.map(e=>e.tag||e.client).slice(0,3).join(', ')}${machines.length>3?'...':''}</span>`:'<span style="color:var(--text3)">Nenhuma</span>'}</td>
-            <td><button class="btn btn-secondary btn-xs">Abrir →</button></td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-secondary btn-xs">Abrir →</button>
+              ${(String(m.tipoRegistro||'').toUpperCase()==='TESTE')
+                ? `<button class="btn btn-danger btn-xs"
+                     onclick="event.stopPropagation();hardDeleteTestRecord('MODELOS','${m.id}','${(m.brand||'').replace(/'/g,"\\'")} ${(m.model||'').replace(/'/g,"\\'")}')"
+                     title="Excluir permanentemente (registro de TESTE)">🗑 TESTE</button>`
+                : ''}
+            </td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>`:`
@@ -2159,6 +2299,11 @@ function renderCatalog(){
         </div>
         <div class="hero-actions">
           <button class="btn btn-secondary btn-sm" onclick="openModalModel('${m.id}')">Editar</button>
+          ${(String(m.tipoRegistro||'').toUpperCase()==='TESTE')
+            ? `<button class="btn btn-danger btn-sm"
+                 onclick="hardDeleteTestRecord('MODELOS','${m.id}','${(m.brand||'').replace(/'/g,"\\'")} ${(m.model||'').replace(/'/g,"\\'")}')"
+                 title="Excluir permanentemente (registro de TESTE)">🗑 TESTE</button>`
+            : ''}
           <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.id}')">Inativar</button>
         </div>
       </div>
@@ -3765,6 +3910,11 @@ function renderMachines(){
               <div class="row-actions">
                 <button class="btn btn-secondary btn-xs" onclick="openMachineDetail('${eq.id}')">Detalhes</button>
                 <button class="btn btn-secondary btn-xs" onclick="openModalMachine('${eq.id}')">Editar</button>
+                ${(String(eq.tipoRegistro||'').toUpperCase()==='TESTE')
+                  ? `<button class="btn btn-danger btn-xs"
+                       onclick="hardDeleteTestRecord('MAQUINAS','${eq.id}','${(eq.client||'Sem cliente').replace(/'/g,"\\'")} - ${(eq.brand||'').replace(/'/g,"\\'")} ${(eq.model||'').replace(/'/g,"\\'")}')"
+                       title="Excluir permanentemente (registro de TESTE)">🗑 TESTE</button>`
+                  : ''}
                 <button class="btn btn-danger btn-xs" onclick="deleteMachine('${eq.id}')">×</button>
               </div>
             </td>
@@ -3932,6 +4082,11 @@ function renderClients(){
             <td>
               <div class="row-actions">
                 <button class="btn-icon" onclick="openModalClient('${c.id}')" title="Editar cliente">✏️</button>
+                ${(String(c.tipoRegistro||'').toUpperCase()==='TESTE')
+                  ? `<button class="btn btn-danger btn-xs"
+                       onclick="hardDeleteTestRecord('CLIENTES','${c.id}','${(c.nome||'Cliente').replace(/'/g,"\\'")}')"
+                       title="Excluir permanentemente (registro de TESTE)">🗑 TESTE</button>`
+                  : ''}
                 <button class="btn-icon" onclick="deleteClient('${c.id}')" title="Inativar cliente">🗑️</button>
               </div>
             </td>
@@ -4008,6 +4163,21 @@ function renderConfigStats(){
         <button class="btn btn-secondary" onclick="testGS()">Testar</button>
       </div>
       <div id="gsTestResult" style="font-size:11px;color:var(--text2);min-height:16px"></div>
+    </div>
+
+    <!-- ── PAINEL DE AUDITORIA ── -->
+    <div class="card" id="cardAuditoria" style="margin-top:16px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Saúde do sistema</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+        Consulta o Google Sheets e retorna totais, órfãos e duplicidades.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-secondary" onclick="auditCheckHealth()">Verificar saúde</button>
+        <button class="btn btn-secondary" onclick="auditCheckDuplicates()">Ver duplicidades</button>
+        <button class="btn btn-secondary" onclick="auditCheckDeleted()">Ver inativados</button>
+        <button class="btn btn-secondary" onclick="auditCreateBackup()">Criar backup</button>
+      </div>
+      <div id="auditResult" style="font-size:12px;color:var(--text2);min-height:24px"></div>
     </div>
 
     <div class="stats-grid" style="margin-bottom:12px">
