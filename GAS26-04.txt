@@ -1,17 +1,27 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// PROPER COMPRESSORES — Google Apps Script (Backend) — v1.3
+// PROPER COMPRESSORES — Google Apps Script (Backend) — v1.4
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // ESTRUTURA DE ABAS DA PLANILHA:
-//   MODELOS      → Catálogo de modelos de equipamentos
-//   MAQUINAS     → Equipamentos cadastrados dos clientes (PGP)
-//   CLIENTES     → Clientes cadastrados no admin
-//   VISITAS      → Registro de cada visita/preventiva realizada
-//   PEÇAS_LOG    → Detalhamento das peças por visita
-//   MACHINE_PARTS→ Último estado das peças por máquina
+//   MODELOS       → Catálogo de modelos de equipamentos
+//   MAQUINAS      → Equipamentos cadastrados dos clientes (PGP)
+//   CLIENTES      → Clientes cadastrados no admin
+//   VISITAS       → Registro de cada visita/preventiva realizada
+//   PECAS_LOG     → Detalhamento das peças por visita
+//   MACHINE_PARTS → Último estado das peças por máquina
+//   PARTS_MASTER  → Catálogo de peças por modelo
+//   PART_SIMILARITIES → Referências similares por peça
 //
-// NOVIDADE v1.3: PARTS_MASTER + PART_SIMILARITIES e endpoints de catálogo
-// IMPORTANTE: execute manualmente `migrateExistingIds()` 1x antes do deploy
+// NOVIDADES v1.4:
+//   - Campos de auditoria em todas as tabelas (Ativo, Tipo_Registro, Created_At, Deleted_At, Deleted_By)
+//   - Soft delete (Ativo = NÃO) em vez de exclusão física
+//   - Hard delete restrito a Tipo_Registro = TESTE
+//   - Schema CLIENTES alinhado com admin (cidade, drive_url, antecedencia_alerta_dias)
+//   - Correção de bug de duplicidade em saveMachine (=== em vez de ==)
+//   - getSheetDataActive filtra registros inativos nos GETs principais
+//   - Suporte a includeDeleted=true nos GETs de MAQUINAS, MODELOS, CLIENTES
+//
+// IMPORTANTE: execute manualmente `migrateExistingIds()` 1x se vier da v1.3
 // ═══════════════════════════════════════════════════════════════════════════
 
 const SS = SpreadsheetApp.getActiveSpreadsheet();
@@ -41,15 +51,58 @@ function checkKey(params_or_body) {
 
 // ── Cabeçalhos das abas ──────────────────────────────────────────────────
 const HEADERS = {
-  MAQUINAS:      ['ID','Cliente','Filial','Marca','Modelo','Série','Ano','TAG','Localização','Hor.Total','h/Semana','Observações','Atualizado'],
-  MODELOS:       ['ID','Marca','Modelo','Tipo','Potência','Pressão','Observações','Atualizado'],
-  CLIENTES:      ['ID','Nome','CNPJ','Contato','Telefone','Email','Observações','Atualizado'],
-  VISITAS:       ['ID','Machine_ID','Cliente','Filial','Marca','Modelo','Série','TAG','Hor.Visita','h/Semana','Cenário','Técnico','Data Visita','Tipo','Obs.Gerais','Enviado'],
-  PECAS_LOG:     ['ID_Visita','ID_Peça','Nome Peça','Ref.','Subsistema','Últ.Troca(h)','N/A','Observação','Ref_Nova','Ref_Anterior','Tipo_Referencia','Acao','Horimetro','Data_Troca'],
-  MACHINE_PARTS: ['Machine_ID','Serial','TAG','Part_ID','Part_Name','Last_Change_H','Interval_H','Ref','NA','Atualizado','Ref_Anterior','Created_At'],
-  PARTS_MASTER: ['Part_ID','Model_ID','Name','OEM_Ref','Part_Brand','Supplier_Primary','Slot','Qty_Default','Interval_H','Criticality','Cost','Obs','Updated_At'],
-  PART_SIMILARITIES: ['Sim_ID','Part_ID','Model_ID','Ref_Similar','Brand_Similar','Obs','Updated_At']
+  MAQUINAS: [
+    'ID','Cliente','Filial','Marca','Modelo','Série','Ano','TAG','Localização',
+    'Hor.Total','h/Semana','Observações',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Atualizado'
+  ],
+  MODELOS: [
+    'ID','Marca','Modelo','Tipo','Potência','Pressão','Observações',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Atualizado'
+  ],
+  CLIENTES: [
+    'ID','Nome','CNPJ','Cidade','Telefone','Email','Observações',
+    'Antecedencia_Alerta_Dias','Drive_URL',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Atualizado'
+  ],
+  VISITAS: [
+    'ID','Machine_ID','Cliente','Filial','Marca','Modelo','Série','TAG',
+    'Hor.Visita','h/Semana','Cenário','Técnico','Data Visita','Tipo','Obs.Gerais',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Enviado'
+  ],
+  PECAS_LOG: [
+    'ID_Visita','ID_Peça','Nome Peça','Ref.','Subsistema','Últ.Troca(h)',
+    'N/A','Observação','Ref_Nova','Ref_Anterior','Tipo_Referencia','Acao',
+    'Horimetro','Data_Troca',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By'
+  ],
+  MACHINE_PARTS: [
+    'Machine_ID','Serial','TAG','Part_ID','Part_Name','Last_Change_H',
+    'Interval_H','Ref','NA','Ref_Anterior','Created_At',
+    'Ativo','Tipo_Registro','Deleted_At','Deleted_By','Atualizado'
+  ],
+  PARTS_MASTER: [
+    'Part_ID','Model_ID','Name','OEM_Ref','Part_Brand','Supplier_Primary',
+    'Slot','Qty_Default','Interval_H','Criticality','Cost','Obs',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Updated_At'
+  ],
+  PART_SIMILARITIES: [
+    'Sim_ID','Part_ID','Model_ID','Ref_Similar','Brand_Similar','Obs',
+    'Ativo','Tipo_Registro','Created_At','Deleted_At','Deleted_By','Updated_At'
+  ]
 };
+
+// ── Valores padrão de auditoria para novas linhas ────────────────────────
+function auditDefaults(tipoRegistro) {
+  const now = new Date().toISOString();
+  return {
+    ativo: 'SIM',
+    tipoRegistro: tipoRegistro || 'PRODUCAO',
+    createdAt: now,
+    deletedAt: '',
+    deletedBy: ''
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENTRY POINT — GET (ping e consultas)
@@ -63,20 +116,24 @@ function doGet(e) {
     if (action !== 'ping') checkKey(params);
     switch (action) {
       case 'ping':
-        result = { status: 'ok', version: '1.3', spreadsheet: SS.getName(), ts: new Date().toISOString() };
+        result = { status: 'ok', version: '1.4', spreadsheet: SS.getName(), ts: new Date().toISOString() };
         break;
       case 'searchMachine':
         result = searchMachine(params.q || '');
         break;
-      case 'getMachines':
-        result = { status: 'ok', machines: getSheetData('MAQUINAS') };
+      case 'getMachines': {
+        const inclDel = params.includeDeleted === 'true';
+        result = { status: 'ok', machines: inclDel ? getSheetData('MAQUINAS') : getSheetDataActive('MAQUINAS') };
         break;
+      }
       case 'getMachinesWithParts':
         result = getMachinesWithParts();
         break;
-      case 'getModels':
-        result = { status: 'ok', models: getSheetData('MODELOS') };
+      case 'getModels': {
+        const inclDel = params.includeDeleted === 'true';
+        result = { status: 'ok', models: inclDel ? getSheetData('MODELOS') : getSheetDataActive('MODELOS') };
         break;
+      }
       case 'getVisits':
         result = { status: 'ok', visits: getVisitsNormalized() };
         break;
@@ -86,11 +143,13 @@ function doGet(e) {
       case 'getAllMachineParts':
         result = { status: 'ok', parts: getSheetData('MACHINE_PARTS') };
         break;
-      case 'getClients':
-        result = { status: 'ok', clients: getSheetData('CLIENTES') };
+      case 'getClients': {
+        const inclDel = params.includeDeleted === 'true';
+        result = { status: 'ok', clients: inclDel ? getSheetData('CLIENTES') : getSheetDataActive('CLIENTES') };
         break;
+      }
       case 'getPartsMaster':
-        result = { status: 'ok', parts: getSheetData('PARTS_MASTER') };
+        result = { status: 'ok', parts: getSheetDataActive('PARTS_MASTER') };
         break;
       case 'getPartSimilarities':
         result = { status: 'ok', similarities: getSheetData('PART_SIMILARITIES') };
@@ -138,16 +197,16 @@ function doPost(e) {
         result = savePreventiva(body);
         break;
       case 'saveMachine':
-        result = saveMachine(body.machine);
+        result = saveMachine({ ...body.machine, tipoRegistro: body.machine?.tipoRegistro || 'PRODUCAO' });
         break;
       case 'deleteMachine':
-        result = deleteRow('MAQUINAS', body.id);
+        result = softDelete('MAQUINAS', body.id, body.deletedBy || 'admin');
         break;
       case 'saveModel':
         result = saveModel(body.model);
         break;
       case 'deleteModel':
-        result = deleteRow('MODELOS', body.id);
+        result = softDelete('MODELOS', body.id, body.deletedBy || 'admin');
         break;
       case 'updateMachineParts':
         result = updateMachineParts(body);
@@ -158,14 +217,15 @@ function doPost(e) {
       case 'replacePartSimilarities':
         result = replacePartSimilarities(body.partId, body.modelId, body.similarities || []);
         break;
-      // ── NOVO v1.2 ──────────────────────────────────────────
       case 'saveClient':
         result = saveClient(body.client);
         break;
       case 'deleteClient':
-        result = deleteRow('CLIENTES', body.id);
+        result = softDelete('CLIENTES', body.id, body.deletedBy || 'admin');
         break;
-      // ───────────────────────────────────────────────────────
+      case 'hardDeleteTestRecord':
+        result = hardDeleteTestRecord(body.sheetName, body.id);
+        break;
       default:
         result = { status: 'error', error: 'Ação desconhecida: ' + action };
     }
@@ -192,9 +252,14 @@ function searchMachine(query) {
   const idxTag    = headers.indexOf('TAG');
   const idxClient = headers.indexOf('Cliente');
   const idxId     = headers.indexOf('ID');
+  const idxAtivo  = headers.indexOf('Ativo');
 
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
+    // Ignorar registros inativos na busca
+    const ativo = String(row[idxAtivo] || 'SIM').toUpperCase();
+    if (ativo === 'NÃO') continue;
+
     const serie  = String(row[idxSerie]  || '').toLowerCase();
     const tag    = String(row[idxTag]    || '').toLowerCase();
     const client = String(row[idxClient] || '').toLowerCase();
@@ -230,14 +295,10 @@ function saveVisit(body) {
 
   const visitSheet = getOrCreateSheet('VISITAS', HEADERS.VISITAS);
   visitSheet.appendRow([
-    visitId,
-    machineId,
-    body.client   || '',
-    body.branch   || '',
-    body.brand    || '',
-    body.model    || '',
-    body.serial   || '',
-    body.tag      || '',
+    visitId, machineId,
+    body.client   || '', body.branch   || '',
+    body.brand    || '', body.model    || '',
+    body.serial   || '', body.tag      || '',
     parseInt(body.hourTotal) || 0,
     parseInt(body.hpw)       || 0,
     body.scenario || '',
@@ -245,27 +306,24 @@ function saveVisit(body) {
     visitDate,
     body.tipo || 'inspecao',
     body.generalObs || '',
-    now
+    'SIM', 'PRODUCAO', now, '', '', now
   ]);
 
   const partsSheet = getOrCreateSheet('PECAS_LOG', HEADERS.PECAS_LOG);
   const parts = body.parts || {};
   Object.entries(parts).forEach(([partId, ps]) => {
     partsSheet.appendRow([
-      visitId,
-      partId,
+      visitId, partId,
       ps.name  || partId,
       ps.ref   || '',
       ps.sub   || '',
       parseInt(ps.lastChange) || 0,
       ps.na ? 'SIM' : 'NÃO',
       ps.obs   || '',
-      '',
-      '',
-      '',
-      '',
+      '', '', '', '',
       parseInt(body.hourTotal) || 0,
-      now
+      now,
+      'SIM', 'PRODUCAO', now, '', ''
     ]);
   });
 
@@ -302,7 +360,7 @@ function updateMachineParts(body) {
   const idxPid  = headers.indexOf('Part_ID');
   const idxRef  = headers.indexOf('Ref');
   const idxRefAnterior = headers.indexOf('Ref_Anterior');
-  const idxCreatedAt = headers.indexOf('Created_At');
+  const idxCreatedAt   = headers.indexOf('Created_At');
   const now     = new Date().toISOString();
 
   Object.entries(parts).forEach(([partId, ps]) => {
@@ -325,7 +383,9 @@ function updateMachineParts(body) {
     if (rowIdx > 0) {
       const existingRef = String(sheet.getRange(rowIdx, idxRef + 1).getValue() || '');
       const incomingRef = String(ps.ref || '');
-      const refAnterior = (incomingRef && existingRef && incomingRef !== existingRef) ? existingRef : String(sheet.getRange(rowIdx, idxRefAnterior + 1).getValue() || '');
+      const refAnterior = (incomingRef && existingRef && incomingRef !== existingRef)
+        ? existingRef
+        : String(sheet.getRange(rowIdx, idxRefAnterior + 1).getValue() || '');
       const createdAt = String(sheet.getRange(rowIdx, idxCreatedAt + 1).getValue() || '');
       const rowData = [
         machineId, serial, tag,
@@ -335,9 +395,8 @@ function updateMachineParts(body) {
         parseInt(ps.interval)   || 2000,
         incomingRef,
         ps.na  ? 'SIM' : 'NÃO',
-        now,
-        refAnterior,
-        createdAt
+        refAnterior, createdAt,
+        'SIM', 'PRODUCAO', '', '', now
       ];
       sheet.getRange(rowIdx, 1, 1, HEADERS.MACHINE_PARTS.length).setValues([rowData]);
     } else {
@@ -349,9 +408,8 @@ function updateMachineParts(body) {
         parseInt(ps.interval)   || 2000,
         ps.ref || '',
         ps.na  ? 'SIM' : 'NÃO',
-        now,
-        '',
-        now
+        '', now,
+        'SIM', 'PRODUCAO', '', '', now
       ];
       sheet.appendRow(rowData);
     }
@@ -364,7 +422,7 @@ function updateMachineParts(body) {
 // GET MACHINES WITH PARTS
 // ═══════════════════════════════════════════════════════════════════════════
 function getMachinesWithParts() {
-  const machines = getSheetData('MAQUINAS').map(row => {
+  const machines = getSheetDataActive('MAQUINAS').map(row => {
     const m = rowToMachineFromObj(row);
     m.parts = getMachinePartsById(m.id, m.serial, m.tag);
     return m;
@@ -459,6 +517,9 @@ function getVisitsNormalized() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SAVE PREVENTIVA
+// ═══════════════════════════════════════════════════════════════════════════
 function savePreventiva(body) {
   ensureSheetHeaders('VISITAS', HEADERS.VISITAS);
   ensureSheetHeaders('PECAS_LOG', HEADERS.PECAS_LOG);
@@ -502,14 +563,10 @@ function savePreventiva(body) {
   ensureMachineFromVisit(body, machineId, body.visitDate, now);
 
   visitSheet.appendRow([
-    visitId,
-    machineId,
-    body.client   || '',
-    body.branch   || '',
-    body.brand    || '',
-    body.model    || '',
-    body.serial   || '',
-    body.tag      || '',
+    visitId, machineId,
+    body.client   || '', body.branch   || '',
+    body.brand    || '', body.model    || '',
+    body.serial   || '', body.tag      || '',
     parseInt(body.hourTotal) || 0,
     parseInt(body.hpw)       || 0,
     body.scenario || '',
@@ -517,7 +574,7 @@ function savePreventiva(body) {
     body.visitDate || now,
     body.tipo || 'preventiva',
     body.generalObs || '',
-    now
+    'SIM', 'PRODUCAO', now, '', '', now
   ]);
 
   const partsSheet = getOrCreateSheet('PECAS_LOG', HEADERS.PECAS_LOG);
@@ -525,23 +582,23 @@ function savePreventiva(body) {
   Object.entries(parts).forEach(([partId, ps]) => {
     const acao = String(ps.acao || '').trim().toLowerCase();
     const refNova = String(ps.ref || '').trim();
-    const refAnterior = String(ps.refAnterior || '').trim() || getCurrentRefFromMachineParts(machineId, body.serial || '', body.tag || '', partId);
+    const refAnterior = String(ps.refAnterior || '').trim() ||
+      getCurrentRefFromMachineParts(machineId, body.serial || '', body.tag || '', partId);
 
     partsSheet.appendRow([
-      visitId,
-      partId,
+      visitId, partId,
       ps.name || partId,
       refNova || refAnterior || '',
       ps.sub || '',
       parseInt(ps.lastChange) || 0,
       ps.na ? 'SIM' : 'NÃO',
       ps.obs || '',
-      refNova,
-      refAnterior,
+      refNova, refAnterior,
       ps.tipoReferencia || '',
       acao,
       parseInt(body.hourTotal) || 0,
-      now
+      now,
+      'SIM', 'PRODUCAO', now, '', ''
     ]);
 
     if (acao === 'trocada') {
@@ -567,6 +624,9 @@ function savePreventiva(body) {
   return { status: 'ok', visitId, machineId, pecasTrocadas, duplicate: false };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GET VISITS BY MACHINE
+// ═══════════════════════════════════════════════════════════════════════════
 function getVisitsByMachine(machineId) {
   const mId = String(machineId || '').trim();
   if (!mId) return { status: 'error', error: 'machine_id obrigatório' };
@@ -614,16 +674,14 @@ function getVisitsByMachine(machineId) {
   return { status: 'ok', visits, pecasLog };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GET MACHINES BY CLIENT
+// ═══════════════════════════════════════════════════════════════════════════
 function getMachinesByClient(clientQuery) {
   const q = String(clientQuery || '').trim();
   if (!q) return { status: 'error', error: 'client obrigatório' };
-  // Anti-duplicidade (referência para o fluxo do campo):
-  // 1) machineKey(client, brand, model, serial)
-  // 2) cliente + série
-  // 3) cliente + TAG
-  // Se encontrar em qualquer nível, não criar nova máquina.
   const norm = v => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-  const machines = getSheetData('MAQUINAS')
+  const machines = getSheetDataActive('MAQUINAS')
     .filter(m => norm(m['Cliente']).includes(norm(q)))
     .map(m => {
       const eq = rowToMachineFromObj(m);
@@ -633,14 +691,20 @@ function getMachinesByClient(clientQuery) {
   return { status: 'ok', machines };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GET CLIENTS FOR FIELD
+// ═══════════════════════════════════════════════════════════════════════════
 function getClientsForField() {
-  const names = getSheetData('MAQUINAS')
+  const names = getSheetDataActive('MAQUINAS')
     .map(m => String(m['Cliente'] || '').trim())
     .filter(Boolean);
   const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
   return { status: 'ok', clients: unique };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS DE MACHINE PARTS
+// ═══════════════════════════════════════════════════════════════════════════
 function getCurrentRefFromMachineParts(machineId, serial, tag, partId) {
   const sheet = getOrCreateSheet('MACHINE_PARTS', HEADERS.MACHINE_PARTS);
   const data = sheet.getDataRange().getValues();
@@ -683,7 +747,7 @@ function updateMachinePartFromPreventiva(payload) {
   const idxPid = headers.indexOf('Part_ID');
   const idxRef = headers.indexOf('Ref');
   const idxRefAnterior = headers.indexOf('Ref_Anterior');
-  const idxCreatedAt = headers.indexOf('Created_At');
+  const idxCreatedAt   = headers.indexOf('Created_At');
 
   for (let i = 1; i < data.length; i++) {
     const rowMid = String(data[i][idxMid] || '').trim();
@@ -695,7 +759,8 @@ function updateMachinePartFromPreventiva(payload) {
                   (tag && rowTag === tag);
     if (match && rowPid === partId) {
       const currentRef = String(data[i][idxRef] || '').trim();
-      const refAnterior = String(payload.refAnterior || '').trim() || ((currentRef && currentRef !== String(payload.refNova || '').trim()) ? currentRef : String(data[i][idxRefAnterior] || '').trim());
+      const refAnterior = String(payload.refAnterior || '').trim() ||
+        ((currentRef && currentRef !== String(payload.refNova || '').trim()) ? currentRef : String(data[i][idxRefAnterior] || '').trim());
       const createdAt = String(data[i][idxCreatedAt] || '').trim();
       const updated = [
         machineId || rowMid,
@@ -707,9 +772,9 @@ function updateMachinePartFromPreventiva(payload) {
         parseInt(payload.interval) || 2000,
         String(payload.refNova || '').trim(),
         String(payload.na || '').toUpperCase() === 'SIM' ? 'SIM' : 'NÃO',
-        payload.now || new Date().toISOString(),
         refAnterior,
-        createdAt || (payload.now || new Date().toISOString())
+        createdAt || (payload.now || new Date().toISOString()),
+        'SIM', 'PRODUCAO', '', '', payload.now || new Date().toISOString()
       ];
       sheet.getRange(i + 1, 1, 1, HEADERS.MACHINE_PARTS.length).setValues([updated]);
       return;
@@ -717,18 +782,16 @@ function updateMachinePartFromPreventiva(payload) {
   }
 
   sheet.appendRow([
-    machineId,
-    serial,
-    tag,
+    machineId, serial, tag,
     partId,
     payload.name || partId,
     parseInt(payload.hourTotal) || 0,
     parseInt(payload.interval) || 2000,
     String(payload.refNova || '').trim(),
     String(payload.na || '').toUpperCase() === 'SIM' ? 'SIM' : 'NÃO',
-    payload.now || new Date().toISOString(),
     String(payload.refAnterior || '').trim(),
-    payload.now || new Date().toISOString()
+    payload.now || new Date().toISOString(),
+    'SIM', 'PRODUCAO', '', '', payload.now || new Date().toISOString()
   ]);
 }
 
@@ -739,23 +802,33 @@ function saveMachine(m) {
   if (!m) return { status: 'error', error: 'Dados ausentes' };
   const sheet = getOrCreateSheet('MAQUINAS', HEADERS.MAQUINAS);
   const now = new Date().toISOString();
+  const ad = auditDefaults(m.tipoRegistro);
 
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxId    = headers.indexOf('ID');
   const idxSerie = headers.indexOf('Série');
+  const idxAtivo = headers.indexOf('Ativo');
 
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === m.id || (m.serial && data[i][idxSerie] == m.serial)) {
+    const sameId     = String(data[i][idxId]    || '').trim() === String(m.id    || '').trim();
+    const sameSerial = m.serial && String(data[i][idxSerie] || '').trim() === String(m.serial).trim();
+    if (sameId || sameSerial) {
+      const idxCreated = headers.indexOf('Created_At');
+      const idxTipo    = headers.indexOf('Tipo_Registro');
+      const originalCreated = String(data[i][idxCreated] || now);
+      const originalTipo    = String(data[i][idxTipo]    || 'PRODUCAO');
+      const originalAtivo   = String(data[i][idxAtivo]   || 'SIM');
       sheet.getRange(i+1, 1, 1, HEADERS.MAQUINAS.length).setValues([[
         m.id || data[i][idxId],
         m.client || '', m.branch || '',
-        m.brand || '', m.model || '',
-        m.serial || '', m.year || '',
-        m.tag || '', m.location || '',
+        m.brand  || '', m.model  || '',
+        m.serial || '', m.year   || '',
+        m.tag    || '', m.location || '',
         parseInt(m.hourTotal) || 0,
-        parseInt(m.hpw) || 0,
-        m.obs || '', now
+        parseInt(m.hpw)       || 0,
+        m.obs || '',
+        originalAtivo, originalTipo, originalCreated, '', '', now
       ]]);
       return { status: 'ok', action: 'updated' };
     }
@@ -764,33 +837,42 @@ function saveMachine(m) {
   sheet.appendRow([
     m.id || machineKey(m.client||'', m.brand||'', m.model||'', m.serial||'') || 'EQ-' + new Date().getTime(),
     m.client || '', m.branch || '',
-    m.brand || '', m.model || '',
-    m.serial || '', m.year || '',
-    m.tag || '', m.location || '',
+    m.brand  || '', m.model  || '',
+    m.serial || '', m.year   || '',
+    m.tag    || '', m.location || '',
     parseInt(m.hourTotal) || 0,
-    parseInt(m.hpw) || 0,
-    m.obs || '', now
+    parseInt(m.hpw)       || 0,
+    m.obs || '',
+    ad.ativo, ad.tipoRegistro, ad.createdAt, ad.deletedAt, ad.deletedBy, now
   ]);
   return { status: 'ok', action: 'inserted' };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SAVE MODEL (catalog)
+// SAVE MODEL
 // ═══════════════════════════════════════════════════════════════════════════
 function saveModel(m) {
   if (!m) return { status: 'error', error: 'Dados ausentes' };
   const sheet = getOrCreateSheet('MODELOS', HEADERS.MODELOS);
   const now = new Date().toISOString();
+  const ad = auditDefaults(m.tipoRegistro);
 
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxId = headers.indexOf('ID');
 
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === m.id) {
+    if (String(data[i][idxId] || '').trim() === String(m.id || '').trim()) {
+      const idxCreated = headers.indexOf('Created_At');
+      const idxTipo    = headers.indexOf('Tipo_Registro');
+      const idxAtivo   = headers.indexOf('Ativo');
       sheet.getRange(i+1, 1, 1, HEADERS.MODELOS.length).setValues([[
         m.id, m.brand || '', m.model || '', m.type || '',
-        m.power || '', m.pressure || '', m.obs || '', now
+        m.power || '', m.pressure || '', m.obs || '',
+        String(data[i][idxAtivo]   || 'SIM'),
+        String(data[i][idxTipo]    || 'PRODUCAO'),
+        String(data[i][idxCreated] || now),
+        '', '', now
       ]]);
       return { status: 'ok', action: 'updated' };
     }
@@ -799,11 +881,15 @@ function saveModel(m) {
   sheet.appendRow([
     m.id || 'MOD-' + new Date().getTime(),
     m.brand || '', m.model || '', m.type || '',
-    m.power || '', m.pressure || '', m.obs || '', now
+    m.power || '', m.pressure || '', m.obs || '',
+    ad.ativo, ad.tipoRegistro, ad.createdAt, ad.deletedAt, ad.deletedBy, now
   ]);
   return { status: 'ok', action: 'inserted' };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SAVE PART MASTER
+// ═══════════════════════════════════════════════════════════════════════════
 function savePartMaster(p) {
   if (!p || !p.id) return { status: 'error', error: 'id da peça obrigatório' };
 
@@ -811,27 +897,22 @@ function savePartMaster(p) {
   const now = new Date().toISOString();
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
-  const idxPartId = headers.indexOf('Part_ID');
+  const idxPartId  = headers.indexOf('Part_ID');
   const idxModelId = headers.indexOf('Model_ID');
 
   const row = [
-    p.id,
-    p.modelId || '',
-    p.name || '',
-    p.ref || '',
-    p.partBrand || '',
-    p.supplierPrimary || '',
-    p.slot || '',
-    parseInt(p.qty) || 1,
+    p.id, p.modelId || '', p.name || '', p.ref || '',
+    p.partBrand || '', p.supplierPrimary || '',
+    p.slot || '', parseInt(p.qty) || 1,
     parseInt(p.interval) || 0,
     p.criticality || 'normal',
     parseFloat(p.cost) || 0,
     p.obs || '',
-    now
+    'SIM', 'PRODUCAO', now, '', '', now
   ];
 
   for (let i = 1; i < data.length; i++) {
-    const samePartId = data[i][idxPartId] === p.id;
+    const samePartId  = data[i][idxPartId]  === p.id;
     const sameModelId = data[i][idxModelId] === (p.modelId || '');
     if (samePartId && sameModelId) {
       sheet.getRange(i + 1, 1, 1, HEADERS.PARTS_MASTER.length).setValues([row]);
@@ -843,8 +924,11 @@ function savePartMaster(p) {
   return { status: 'ok', action: 'inserted' };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REPLACE PART SIMILARITIES
+// ═══════════════════════════════════════════════════════════════════════════
 function replacePartSimilarities(partId, modelId, similarities) {
-  if (!partId) return { status: 'error', error: 'partId obrigatório' };
+  if (!partId)  return { status: 'error', error: 'partId obrigatório' };
   if (!modelId) return { status: 'error', error: 'modelId obrigatório' };
 
   const sheet = getOrCreateSheet('PART_SIMILARITIES', HEADERS.PART_SIMILARITIES);
@@ -856,7 +940,7 @@ function replacePartSimilarities(partId, modelId, similarities) {
 
   const rowsToKeep = [headers];
   for (let i = 1; i < data.length; i++) {
-    const samePart = String(data[i][idxPid]).trim() === String(partId).trim();
+    const samePart  = String(data[i][idxPid]).trim() === String(partId).trim();
     const sameModel = String(data[i][idxMid]).trim() === String(modelId).trim();
     if (!(samePart && sameModel)) rowsToKeep.push(data[i]);
   }
@@ -868,12 +952,11 @@ function replacePartSimilarities(partId, modelId, similarities) {
 
   const newRows = (similarities || []).map((s, idx) => [
     'SIM-' + partId + '-' + modelId + '-' + idx,
-    partId,
-    modelId,
-    typeof s === 'string' ? s : (s.ref || ''),
-    typeof s === 'object' ? (s.brand || '') : '',
-    typeof s === 'object' ? (s.obs || '') : '',
-    now
+    partId, modelId,
+    typeof s === 'string' ? s : (s.ref   || ''),
+    typeof s === 'object'  ? (s.brand || '') : '',
+    typeof s === 'object'  ? (s.obs   || '') : '',
+    'SIM', 'PRODUCAO', now, '', '', now
   ]);
 
   if (newRows.length > 0) {
@@ -883,53 +966,61 @@ function replacePartSimilarities(partId, modelId, similarities) {
   return { status: 'ok', replaced: newRows.length };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GET CATALOG FULL
+// ═══════════════════════════════════════════════════════════════════════════
 function getCatalogFull() {
   return {
     status: 'ok',
-    models: getSheetData('MODELOS'),
-    parts: getSheetData('PARTS_MASTER'),
+    models:       getSheetDataActive('MODELOS'),
+    parts:        getSheetDataActive('PARTS_MASTER'),
     similarities: getSheetData('PART_SIMILARITIES')
   };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SAVE / UPDATE CLIENT — NOVO v1.2
+// SAVE / UPDATE CLIENT
 // ═══════════════════════════════════════════════════════════════════════════
 function saveClient(c) {
   if (!c) return { status: 'error', error: 'Dados ausentes' };
   const sheet = getOrCreateSheet('CLIENTES', HEADERS.CLIENTES);
   const now = new Date().toISOString();
+  const ad = auditDefaults(c.tipoRegistro);
 
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxId = headers.indexOf('ID');
 
+  const buildRow = (ativo, tipo, created) => [
+    c.id || 'CLI-' + new Date().getTime(),
+    c.nome      || '',
+    c.cnpj      || '',
+    c.cidade    || '',
+    c.telefone  || '',
+    c.email     || '',
+    c.observacoes || c.obs || '',
+    parseInt(c.antecedencia_alerta_dias) || 0,
+    c.drive_url || '',
+    ativo, tipo, created, '', '', now
+  ];
+
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === c.id) {
-      sheet.getRange(i+1, 1, 1, HEADERS.CLIENTES.length).setValues([[
-        c.id,
-        c.nome     || '',
-        c.cnpj     || '',
-        c.contato  || '',
-        c.telefone || '',
-        c.email    || '',
-        c.obs      || '',
-        now
-      ]]);
+    if (String(data[i][idxId] || '').trim() === String(c.id || '').trim()) {
+      const idxCreated = headers.indexOf('Created_At');
+      const idxTipo    = headers.indexOf('Tipo_Registro');
+      const idxAtivo   = headers.indexOf('Ativo');
+      sheet.getRange(i+1, 1, 1, HEADERS.CLIENTES.length).setValues([
+        buildRow(
+          String(data[i][idxAtivo]   || 'SIM'),
+          String(data[i][idxTipo]    || 'PRODUCAO'),
+          String(data[i][idxCreated] || now)
+        )
+      ]);
       return { status: 'ok', action: 'updated' };
     }
   }
 
-  sheet.appendRow([
-    c.id || 'CLI-' + new Date().getTime(),
-    c.nome     || '',
-    c.cnpj     || '',
-    c.contato  || '',
-    c.telefone || '',
-    c.email    || '',
-    c.obs      || '',
-    now
-  ]);
+  sheet.appendRow(buildRow(ad.ativo, ad.tipoRegistro, ad.createdAt));
   return { status: 'ok', action: 'inserted' };
 }
 
@@ -941,44 +1032,44 @@ function ensureMachineFromVisit(body, machineId, visitDate, now) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
 
-  const idxId    = headers.indexOf('ID');
-  const idxCli   = headers.indexOf('Cliente');
-  const idxFil   = headers.indexOf('Filial');
-  const idxMar   = headers.indexOf('Marca');
-  const idxMod   = headers.indexOf('Modelo');
-  const idxSer   = headers.indexOf('Série');
-  const idxAno   = headers.indexOf('Ano');
-  const idxTag   = headers.indexOf('TAG');
-  const idxLoc   = headers.indexOf('Localização');
-  const idxHor   = headers.indexOf('Hor.Total');
-  const idxHpw   = headers.indexOf('h/Semana');
-  const idxObs   = headers.indexOf('Observações');
-  const idxUpd   = headers.indexOf('Atualizado');
+  const idxId  = headers.indexOf('ID');
+  const idxCli = headers.indexOf('Cliente');
+  const idxFil = headers.indexOf('Filial');
+  const idxMar = headers.indexOf('Marca');
+  const idxMod = headers.indexOf('Modelo');
+  const idxSer = headers.indexOf('Série');
+  const idxAno = headers.indexOf('Ano');
+  const idxTag = headers.indexOf('TAG');
+  const idxLoc = headers.indexOf('Localização');
+  const idxHor = headers.indexOf('Hor.Total');
+  const idxHpw = headers.indexOf('h/Semana');
+  const idxObs = headers.indexOf('Observações');
+  const idxUpd = headers.indexOf('Atualizado');
 
-  const client   = body.client || '';
-  const branch   = body.branch || '';
-  const brand    = body.brand || '';
-  const model    = body.model || '';
-  const serial   = body.serial || '';
-  const year     = body.year || '';
-  const tag      = body.tag || '';
-  const location = body.location || '';
-  const hourTotal= parseInt(body.hourTotal) || 0;
-  const hpw      = parseInt(body.hpw) || 0;
-  const obs      = body.generalObs || body.obs || '';
+  const client    = body.client    || '';
+  const branch    = body.branch    || '';
+  const brand     = body.brand     || '';
+  const model     = body.model     || '';
+  const serial    = body.serial    || '';
+  const year      = body.year      || '';
+  const tag       = body.tag       || '';
+  const location  = body.location  || '';
+  const hourTotal = parseInt(body.hourTotal) || 0;
+  const hpw       = parseInt(body.hpw)       || 0;
+  const obs       = body.generalObs || body.obs || '';
 
   for (let i = 1; i < data.length; i++) {
-    const rowId  = String(data[i][idxId] || '').trim();
+    const rowId  = String(data[i][idxId]  || '').trim();
     const rowSer = String(data[i][idxSer] || '').trim();
     const rowTag = String(data[i][idxTag] || '').trim();
 
-    const match = (machineId && rowId === String(machineId).trim()) ||
-                  (serial && rowSer === String(serial).trim()) ||
-                  (tag && rowTag === String(tag).trim());
+    const match = (machineId && rowId  === String(machineId).trim()) ||
+                  (serial    && rowSer === String(serial).trim())    ||
+                  (tag       && rowTag === String(tag).trim());
 
     if (match) {
       const existingHour = parseInt(data[i][idxHor]) || 0;
-      sheet.getRange(i + 1, idxId + 1).setValue(machineId || rowId);
+      sheet.getRange(i + 1, idxId  + 1).setValue(machineId || rowId);
       if (client)   sheet.getRange(i + 1, idxCli + 1).setValue(client);
       if (branch)   sheet.getRange(i + 1, idxFil + 1).setValue(branch);
       if (brand)    sheet.getRange(i + 1, idxMar + 1).setValue(brand);
@@ -998,9 +1089,9 @@ function ensureMachineFromVisit(body, machineId, visitDate, now) {
   sheet.appendRow([
     machineId || machineKey(client, brand, model, serial) || ('EQ-' + new Date().getTime()),
     client, branch, brand, model, serial, year, tag, location,
-    hourTotal, hpw, obs, now
+    hourTotal, hpw, obs,
+    'SIM', 'PRODUCAO', now, '', '', now
   ]);
-
   return { status: 'ok', action: 'inserted', machineId: machineId };
 }
 
@@ -1008,11 +1099,11 @@ function updateMachineHorímetro(machineId, serial, tag, hourTotal, visitDate) {
   const sheet = getOrCreateSheet('MAQUINAS', HEADERS.MAQUINAS);
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
-  const idxId   = headers.indexOf('ID');
-  const idxSerie= headers.indexOf('Série');
-  const idxTag  = headers.indexOf('TAG');
-  const idxHor  = headers.indexOf('Hor.Total');
-  const idxUpd  = headers.indexOf('Atualizado');
+  const idxId    = headers.indexOf('ID');
+  const idxSerie = headers.indexOf('Série');
+  const idxTag   = headers.indexOf('TAG');
+  const idxHor   = headers.indexOf('Hor.Total');
+  const idxUpd   = headers.indexOf('Atualizado');
 
   for (let i = 1; i < data.length; i++) {
     const rowId  = String(data[i][idxId]    || '').trim();
@@ -1034,19 +1125,66 @@ function updateMachineHorímetro(machineId, serial, tag, hourTotal, visitDate) {
   }
 }
 
-function deleteRow(sheetName, id) {
+// ═══════════════════════════════════════════════════════════════════════════
+// SOFT DELETE (substitui deleteRow para MAQUINAS, MODELOS, CLIENTES)
+// ═══════════════════════════════════════════════════════════════════════════
+function softDelete(sheetName, id, deletedBy) {
   const sheet = getOrCreateSheet(sheetName, HEADERS[sheetName]);
   const data = sheet.getDataRange().getValues();
-  const idxId = data[0].indexOf('ID');
+  const headers = data[0];
+  const idxId  = headers.indexOf('ID');
+  const idxAlt = headers.indexOf('ID_Visita');
+  const idxFinal = idxId >= 0 ? idxId : idxAlt;
+
+  const idxAtivo      = headers.indexOf('Ativo');
+  const idxDeletedAt  = headers.indexOf('Deleted_At');
+  const idxDeletedBy  = headers.indexOf('Deleted_By');
+  const idxAtualizado = headers.indexOf('Atualizado');
+  const now = new Date().toISOString();
+
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === id) {
-      sheet.deleteRow(i+1);
-      return { status: 'ok' };
+    if (String(data[i][idxFinal] || '').trim() === String(id).trim()) {
+      if (idxAtivo      >= 0) sheet.getRange(i+1, idxAtivo+1).setValue('NÃO');
+      if (idxDeletedAt  >= 0) sheet.getRange(i+1, idxDeletedAt+1).setValue(now);
+      if (idxDeletedBy  >= 0) sheet.getRange(i+1, idxDeletedBy+1).setValue(deletedBy || 'admin');
+      if (idxAtualizado >= 0) sheet.getRange(i+1, idxAtualizado+1).setValue(now);
+      return { status: 'ok', action: 'soft_deleted' };
     }
   }
   return { status: 'ok', note: 'Não encontrado' };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// HARD DELETE — apenas registros com Tipo_Registro = TESTE
+// ═══════════════════════════════════════════════════════════════════════════
+function hardDeleteTestRecord(sheetName, id) {
+  if (!sheetName || !id) return { status: 'error', error: 'sheetName e id obrigatórios' };
+  if (!HEADERS[sheetName]) return { status: 'error', error: 'Tabela inválida: ' + sheetName };
+
+  const sheet = getOrCreateSheet(sheetName, HEADERS[sheetName]);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId   = headers.indexOf('ID');
+  const idxTipo = headers.indexOf('Tipo_Registro');
+
+  if (idxTipo < 0) return { status: 'error', error: 'Tabela sem coluna Tipo_Registro' };
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId] || '').trim() === String(id).trim()) {
+      const tipo = String(data[i][idxTipo] || '').trim().toUpperCase();
+      if (tipo !== 'TESTE') {
+        return { status: 'error', error: 'Hard delete permitido apenas para TESTE. Este é: ' + (tipo || 'PRODUCAO') };
+      }
+      sheet.deleteRow(i + 1);
+      return { status: 'ok', action: 'hard_deleted' };
+    }
+  }
+  return { status: 'ok', note: 'Não encontrado' };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET SHEET DATA
+// ═══════════════════════════════════════════════════════════════════════════
 function getSheetData(sheetName) {
   const sheet = getOrCreateSheet(sheetName, HEADERS[sheetName]);
   const data = sheet.getDataRange().getValues();
@@ -1057,6 +1195,12 @@ function getSheetData(sheetName) {
     headers.forEach((h, j) => obj[h] = row[j]);
     return obj;
   });
+}
+
+// Retorna apenas linhas onde Ativo != 'NÃO'
+function getSheetDataActive(sheetName) {
+  const all = getSheetData(sheetName);
+  return all.filter(row => String(row['Ativo'] || 'SIM').trim().toUpperCase() !== 'NÃO');
 }
 
 function rowToMachine(row) {
@@ -1110,7 +1254,10 @@ function getOrCreateSheet(name, headers) {
   if (!sheet) {
     sheet = SS.insertSheet(name);
     sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1a3a6b').setFontColor('#ffffff');
+    sheet.getRange(1, 1, 1, headers.length)
+      .setFontWeight('bold')
+      .setBackground('#1a3a6b')
+      .setFontColor('#ffffff');
     sheet.setFrozenRows(1);
     sheet.setColumnWidths(1, headers.length, 150);
   }
@@ -1125,7 +1272,7 @@ function migrateExistingIds() {
   const sheet = getOrCreateSheet('MAQUINAS', HEADERS.MAQUINAS);
   const data  = sheet.getDataRange().getValues();
   if (data.length < 2) return 'Sem dados';
-  const headers = data[0];
+  const headers   = data[0];
   const idxId     = headers.indexOf('ID');
   const idxClient = headers.indexOf('Cliente');
   const idxBrand  = headers.indexOf('Marca');
