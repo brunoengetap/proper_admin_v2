@@ -3915,7 +3915,7 @@ function renderMachines(){
                        onclick="hardDeleteTestRecord('MAQUINAS','${eq.id}','${(eq.client||'Sem cliente').replace(/'/g,"\\'")} - ${(eq.brand||'').replace(/'/g,"\\'")} ${(eq.model||'').replace(/'/g,"\\'")}')"
                        title="Excluir permanentemente (registro de TESTE)">🗑 TESTE</button>`
                   : ''}
-                <button class="btn btn-danger btn-xs" onclick="deleteMachine('${eq.id}')">×</button>
+                <button class="btn btn-danger btn-xs" onclick="deleteMachine('${eq.id}')" title="Inativar equipamento">Inativar</button>
               </div>
             </td>
           </tr>`;
